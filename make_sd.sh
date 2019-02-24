@@ -148,7 +148,8 @@ __EOF__
 #
 #                                                      /<BOOT>/setup-phase-2.sh
 #
-cat > ${DIR_THIS}/mnt/setup-phase-2.sh <<-__EOF__
+(
+cat <<-__EOF__
 #!/bin/sh
 
 set -x
@@ -162,6 +163,57 @@ apk add bash htop jq docker perl
 rc-update add docker boot
 service docker start
 __EOF__
+
+if [[ -n "${WLAN_SSID}" && -n "${WLAN_PASSWORD}" ]]; then
+cat <<-__EOF__
+apk add wireless-tools wpa_supplicant
+ip link | grep wlan0
+ip link set wlan0 up
+iwlist wlan0 scanning
+iwconfig wlan0 essid ${WLAN_SSID}
+
+cat > /etc/wpa_supplicant/wpa_supplicant.conf <<-_EOF_
+ctrl_interface=DIR=/var/run/wpa_supplicant GROUP=netdev
+update_config=1
+_EOF_
+
+wpa_passphrase "${WLAN_SSID}" "${WLAN_PASSWORD}" > /etc/wpa_supplicant/wpa_supplicant.conf
+wpa_supplicant -B -i wlan0 -c /etc/wpa_supplicant/wpa_supplicant.conf
+udhcpc -i wlan0
+ip addr show wlan0
+
+###############################################################################
+#
+# Update /etc/network/interfaces
+#
+cat >> /etc/network/interfaces <<-_EOF_
+
+auto wlan0
+iface wlan0 inet dhcp
+wpa-conf /etc/wpa_supplicant/wpa_supplicant.conf
+_EOF_
+
+###############################################################################
+#
+# Configure udhcpc to ignore DNS and GATEWAY from wlan0
+#
+mkdir -p /etc/udhcpc
+cat > /etc/udhcpc/udhcpc.conf <<-_EOF_
+NO_DNS=wlan0
+NO_GATEWAY=wlan0
+_EOF_
+
+###############################################################################
+#
+# Enable WLAN
+#
+ifconfig wlan0 down
+/etc/init.d/wpa_supplicant start
+rc-update add wpa_supplicant boot
+
+__EOF__
+fi
+)  > "${DIR_THIS}/mnt/setup-phase-2.sh"
 #
 #                                                      /<BOOT>/setup-phase-2.sh
 #
