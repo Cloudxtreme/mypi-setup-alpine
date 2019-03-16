@@ -2,6 +2,8 @@
 
 set -e
 
+RPI_HOSTNAME=rpi2
+
 ALPINE_VERSION=3.8.2
 ALPINE_ARCH=aarch64
 
@@ -10,34 +12,45 @@ DIR_THIS="$(cd "$(dirname "${BASH_SOURCE[0]}")"; pwd)"
 DEVICE="${1:-/dev/mmcblk0}"
 BOOT_DEVICE="${DEVICE}p1"
 
-DEVICE_SIZE=$(blockdev --getsz "${DEVICE}")
+DIR_APKOVL="${DIR_THIS}/apkovl"
 
-PARTITIONS="$(fdisk -l "${DEVICE}" | grep "^${DEVICE}")"
+mkdir -p "${DIR_APKOVL}"
+rm -rf "${DIR_APKOVL:?}/*"
 
-echo "${PARTITIONS}"
+if [[ "Darwin" == "$(uname -s)" ]]; then
+    rm -f ./mnt
+    ln -s "/Volumes/NO NAME" ./mnt
+    rm -rf ./mnt/*
+else
+    DEVICE_SIZE=$(blockdev --getsz "${DEVICE}")
+
+    PARTITIONS="$(fdisk -l "${DEVICE}" | grep "^${DEVICE}")"
+
+    echo "${PARTITIONS}"
 
 
-mkdir -p "${DIR_THIS}/mnt"
+    mkdir -p "${DIR_THIS}/mnt"
 
-(umount "${DIR_THIS}/mnt" || true) &>/dev/null
+    (umount "${DIR_THIS}/mnt" || true) &>/dev/null
 
-mkfs.vfat "${BOOT_DEVICE}"
+    mkfs.vfat "${BOOT_DEVICE}"
 
-mount "${BOOT_DEVICE}" "${DIR_THIS}/mnt"
+    mount "${BOOT_DEVICE}" "${DIR_THIS}/mnt"
+fi
 
 pushd ${DIR_THIS}/mnt
 tar xf "${DIR_THIS}/alpine-rpi-${ALPINE_VERSION}-${ALPINE_ARCH}.tar.gz" --no-same-owner  
 popd
 
-cat > ${DIR_THIS}/mnt/answer.txt <<-__EOF__
+cat > "${DIR_APKOVL}/answer.txt" <<-__EOF__
 KEYMAPOPTS="us us"
-HOSTNAMEOPTS="-n rpi2"
+HOSTNAMEOPTS="-n ${RPI_HOSTNAME}"
 INTERFACESOPTS="auto lo
 iface lo inet loopback
 
 auto eth0
 iface eth0 inet dhcp
-    hostname rpi2
+    hostname ${RPI_HOSTNAME}
 "
 TIMEZONEOPTS="-z UTC"
 PROXYOPTS=none
@@ -54,7 +67,7 @@ ROOT_DEVICE=mmcblk0p2
 
 ###############################################################################
 #
-#                                                              /<BOOT>/setup.sh
+#                                                            /<APKOVL>/setup.sh
 #
 (
 cat <<-__EOF__
@@ -68,7 +81,7 @@ date -s "@$(date +'%s')"
 
 cd /media/${BOOT_DEVICE}
 
-NOCOMMIT=1 setup-alpine -f ./answer.txt
+NOCOMMIT=1 setup-alpine -f /answer.txt
 
 apk update
 apk add e2fsprogs
@@ -138,11 +151,33 @@ sed -i 's/^/root=\\/dev\\/${ROOT_DEVICE} /' /media/${BOOT_DEVICE}/cmdline.txt
 reboot 
 
 __EOF__
-) > ${DIR_THIS}/mnt/setup.sh 
+) > "${DIR_APKOVL}/setup.sh" 
+chmod 755 "${DIR_APKOVL}/setup.sh"
 #
-#                                                              /<BOOT>/setup.sh
+#                                                            /<APKOVL>/setup.sh
 #
 ###############################################################################
+
+###############################################################################
+#
+#                                               /<APKOVL>/etc/init.d/mypi-setup
+#
+mkdir -p "${DIR_APKOVL}/etc/init.d"
+(
+cat << __EOF__
+#!/sbin/openrc-run
+start()
+{
+    /setup.sh
+}
+__EOF__
+) > "${DIR_APKOVL}/etc/init.d/mypi-setup"
+chmod 755 "${DIR_APKOVL}/etc/init.d/mypi-setup"
+#
+#                                               /<APKOVL>/etc/init.d/mypi-setup
+#
+###############################################################################
+
 
 ###############################################################################
 #
@@ -218,5 +253,18 @@ fi
 #                                                      /<BOOT>/setup-phase-2.sh
 #
 ###############################################################################
+
+touch "${DIR_APKOVL}/etc/.default_boot_services"
+
+mkdir -p "${DIR_APKOVL}/etc/runlevels/default"
+pushd "${DIR_APKOVL}/etc/runlevels/default"
+ln -s \
+    /etc/init.d/mypi-setup \
+    .
+popd >/dev/null
+
+pushd "${DIR_APKOVL}"
+    tar czf ${DIR_THIS}/mnt/${RPI_HOSTNAME}.apkovl.tar.gz .
+popd >/dev/null
 
 #umount "${DIR_THIS}/mnt"
