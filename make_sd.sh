@@ -9,8 +9,9 @@ ALPINE_ARCH=aarch64
 
 DIR_THIS="$(cd "$(dirname "${BASH_SOURCE[0]}")"; pwd)"
 
-DEVICE="${1:-/dev/mmcblk0}"
+DEVICE="${1:-mmcblk0}"
 BOOT_DEVICE="${DEVICE}p1"
+ROOT_DEVICE="${DEVICE}p2"
 
 DIR_APKOVL="${DIR_THIS}/apkovl"
 
@@ -22,9 +23,9 @@ if [[ "Darwin" == "$(uname -s)" ]]; then
     ln -s "/Volumes/NO NAME" ./mnt
     rm -rf ./mnt/*
 else
-    DEVICE_SIZE=$(blockdev --getsz "${DEVICE}")
+    DEVICE_SIZE=$(blockdev --getsz "/dev/${DEVICE}")
 
-    PARTITIONS="$(fdisk -l "${DEVICE}" | grep "^${DEVICE}")"
+    PARTITIONS="$(fdisk -l "/dev/${DEVICE}" | grep "^/dev/${DEVICE}")"
 
     echo "${PARTITIONS}"
 
@@ -35,7 +36,7 @@ else
 
     mkfs.vfat "${BOOT_DEVICE}"
 
-    mount "${BOOT_DEVICE}" "${DIR_THIS}/mnt"
+    mount "/dev/${BOOT_DEVICE}" "${DIR_THIS}/mnt"
 fi
 
 pushd ${DIR_THIS}/mnt
@@ -61,9 +62,6 @@ NTPOPTS="-c busybox"
 APKCACHEOPTS="none"
 LBUOPTS="none"
 __EOF__
-
-BOOT_DEVICE=mmcblk0p1
-ROOT_DEVICE=mmcblk0p2
 
 ###############################################################################
 #
@@ -91,7 +89,7 @@ yes | mkfs.ext4 /dev/${ROOT_DEVICE}
 mount /dev/${ROOT_DEVICE} /mnt
 __EOF__
 
-if echo "${ALPINE_VERSION}" | grep ^3.8* > /dev/null ; then
+if echo "${ALPINE_VERSION}" | grep ^3\.8.* > /dev/null ; then
 ##-------------------------------------------------------------- alpine 3.8 ---
 cat << __EOF__
 mount -o remount,rw /media/${BOOT_DEVICE}
@@ -137,7 +135,7 @@ __EOF__
 fi
 
 cat << __EOF__
-mkdir media/mmcblk0p1   # It's the mount point for the first partition on the next reboot
+mkdir media/${BOOT_DEVICE} # It's the mount point for the first partition on the next reboot
 
 ln -s media/${BOOT_DEVICE}/boot boot
 
