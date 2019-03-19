@@ -1,0 +1,58 @@
+#!/bin/sh
+
+set -x
+set -e
+
+if [ ! -f /mypi-setup/config ]; then
+    echo "mypi-setup is not configured... skipping"
+    exit 0
+fi
+
+source /mypi-setup/config
+
+# ensure that the time is not to far in the past
+date -s "@$(date -r /mypi-setup/config "+%s")"
+
+cd "/media/${BOOT_DEVICE_NAME}"
+
+NOCOMMIT=1 setup-alpine -f /mypi-setup/answer.txt
+
+apk update
+apk add e2fsprogs
+
+yes | mkfs.ext4 "/dev/${ROOT_DEVICE_NAME}"
+
+mount /dev/${ROOT_DEVICE_NAME} /mnt
+
+if grep "^3\.8" < /etc/alpine-release > /dev/null; then
+    /mypi-setup/setup-disk-3.8
+else
+    /mypi-setup/setup-disk-3.9
+fi
+
+cd /mnt
+
+mkdir media/${BOOT_DEVICE_NAME} # It's the mount point for the first partition on the next reboot
+
+ln -s media/${BOOT_DEVICE_NAME}/boot boot
+
+echo "/dev/${BOOT_DEVICE_NAME} /media/${BOOT_DEVICE_NAME} vfat defaults 0 0" >> etc/fstab
+if [ -n "${SWAP_DEVICE_NAME}" ]; then
+    echo "/dev/${SWAP_DEVICE_NAME} none swap sw 0 0" >> etc/fstab
+    rc-service swap start
+fi
+
+sed -i '/cdrom/d' etc/fstab   # Of course, you don't have any cdrom or floppy on the Raspberry Pi
+sed -i '/floppy/d' etc/fstab
+
+sed -i '/v.\..\/community/s/^#//' /mnt/etc/apk/repositories   # But enable the repository for community if you want vim, mc, php, apache, nginx, etc.
+
+cp -a /mypi-setup /mnt
+mv /mnt/mypi-setup/setup-phase-2 /mnt/mypi-setup/setup
+cp -a /etc/init.d/mypi-setup /mnt/etc/init.d/
+cp -a /etc/runlevels/default/mypi-setup /mnt//etc/runlevels/default
+
+# switch to new root filesystem
+sed -i "s/^/root=\/dev\/${ROOT_DEVICE_NAME} /" /media/${BOOT_DEVICE_NAME}/cmdline.txt  
+reboot 
+

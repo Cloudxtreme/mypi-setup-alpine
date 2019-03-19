@@ -1,0 +1,32 @@
+#!/bin/sh
+
+set -e
+
+source /mypi-setup/config
+
+mount -o remount,rw /media/${BOOT_DEVICE_NAME}
+
+cd /mnt
+
+cp -a /bin /etc /home /lib /root /run /sbin /srv /usr /var .
+mkdir .modloop
+mkdir dev
+mkdir media
+mkdir proc
+mkdir sys
+mkdir tmp
+
+mkdir boot
+cp /media/${BOOT_DEVICE_NAME}/boot/* boot/
+
+<etc/init.d/modloop awk '
+    /if.*KOPT_modloop/ { 
+        print "\\t\\t\\t\\tif [ \"\${dir}\" == \"/\" ]; then"
+        print "\\t\\t\\t\\t\\tdir=\"\""
+        print "\\t\\t\\t\\tfi"
+    }
+    1' | sed 's,&& \$2 != "/" ,,' > etc/init.d/modloop.new
+mv etc/init.d/modloop.new etc/init.d/modloop
+chmod 755 etc/init.d/modloop
+
+sed -i 's/^/modloop=\\/boot\\/modloop-rpi /' /media/${BOOT_DEVICE_NAME}/cmdline.txt  

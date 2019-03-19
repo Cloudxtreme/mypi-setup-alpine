@@ -1,0 +1,16 @@
+#!/bin/sh
+
+set -e
+
+source /mypi-setup/config
+
+setup-disk -m sys /mnt
+
+mount -o remount,rw /media/${BOOT_DEVICE_NAME}
+
+rm -f /media/${BOOT_DEVICE_NAME}/boot/*  
+cd /mnt       # We are in the second partition 
+rm boot/boot  # Drop the unused symbolink link
+
+mv boot/* /media/${BOOT_DEVICE_NAME}/boot/
+rm -Rf boot

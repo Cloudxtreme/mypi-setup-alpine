@@ -1,0 +1,22 @@
+#!/bin/sh
+
+set -x
+set -e
+
+source /mypi-setup/config
+
+rc-update del hwclock boot &> /dev/null|| true
+rc-update add swclock boot
+
+apk add bash htop jq docker perl
+
+rc-update add docker boot
+service docker start
+
+if [ -n "${WLAN_SSID}" && -n "${WLAN_PASSWORD}" ]; then
+    /mypi-setup/setup-wlan
+fi
+
+rm /mypi-setup/setup
+
+reboot

@@ -4,19 +4,14 @@ set -e
 
 RPI_HOSTNAME=rpi2
 
-ALPINE_VERSION=3.8.2
-ALPINE_ARCH=aarch64
+ALPINE_VERSION=3.9.2
+ALPINE_ARCH=armv7
 
 DIR_THIS="$(cd "$(dirname "${BASH_SOURCE[0]}")"; pwd)"
 
 DEVICE="${1:-mmcblk0}"
 BOOT_DEVICE="${DEVICE}p1"
 ROOT_DEVICE="${DEVICE}p2"
-
-DIR_APKOVL="${DIR_THIS}/apkovl"
-
-mkdir -p "${DIR_APKOVL}"
-rm -rf "${DIR_APKOVL:?}/*"
 
 if [[ "Darwin" == "$(uname -s)" ]]; then
     rm -f ./mnt
@@ -32,9 +27,11 @@ else
 
     mkdir -p "${DIR_THIS}/mnt"
 
+    (umount "/dev/${BOOT_DEVICE}" || true) &>/dev/null
+    (umount "/dev/${ROOT_DEVICE}" || true) &>/dev/null
     (umount "${DIR_THIS}/mnt" || true) &>/dev/null
 
-    mkfs.vfat "${BOOT_DEVICE}"
+    mkfs.vfat "/dev/${BOOT_DEVICE}"
 
     mount "/dev/${BOOT_DEVICE}" "${DIR_THIS}/mnt"
 fi
@@ -43,7 +40,26 @@ pushd ${DIR_THIS}/mnt
 tar xf "${DIR_THIS}/alpine-rpi-${ALPINE_VERSION}-${ALPINE_ARCH}.tar.gz" --no-same-owner  
 popd
 
-cat > "${DIR_APKOVL}/answer.txt" <<-__EOF__
+DIR_APKOVL="${DIR_THIS}/apkovl"
+
+if [[ ! -d "${DIR_APKOVL}" ]]; then
+    mkdir -p "${DIR_APKOVL}"
+else
+    rm -rf "${DIR_APKOVL}/"*
+fi
+
+cp -a "${DIR_THIS}/src/"* "${DIR_APKOVL}"
+
+APKREPOSOPTS=-f
+#APKREPOSOPTS=-1
+#APKREPOSOPTS=mirror1.hs-esslingen.de
+
+echo "BOOT_DEVICE_NAME=${BOOT_DEVICE}" >> "${DIR_APKOVL}/mypi-setup/config"
+echo "ROOT_DEVICE_NAME=${ROOT_DEVICE}" >> "${DIR_APKOVL}/mypi-setup/config"
+echo "WLAN_SSID=${WLAN_SSID}"          >> "${DIR_APKOVL}/mypi-setup/config"
+echo "WLAN_PASSWORD=${WLAN_PASSWORD}"  >> "${DIR_APKOVL}/mypi-setup/config"
+
+cat > "${DIR_APKOVL}/mypi-setup/answer.txt" <<-__EOF__
 KEYMAPOPTS="us us"
 HOSTNAMEOPTS="-n ${RPI_HOSTNAME}"
 INTERFACESOPTS="auto lo
@@ -55,127 +71,12 @@ iface eth0 inet dhcp
 "
 TIMEZONEOPTS="-z UTC"
 PROXYOPTS=none
-#APKREPOSOPTS="-f"
-APKREPOSOPTS="-1"
+APKREPOSOPTS="${APKREPOSOPTS}"
 SSHDOPTS="-c openssh"
 NTPOPTS="-c busybox"
 APKCACHEOPTS="none"
 LBUOPTS="none"
 __EOF__
-
-###############################################################################
-#
-#                                                            /<APKOVL>/setup.sh
-#
-(
-cat <<-__EOF__
-#!/bin/sh
-
-set -x
-set -e
-
-# ensure that the time is not to far in the past
-date -s "@$(date +'%s')"
-
-cd /media/${BOOT_DEVICE}
-
-NOCOMMIT=1 setup-alpine -f /answer.txt
-
-apk update
-apk add e2fsprogs
-
-yes | mkfs.ext4 /dev/${ROOT_DEVICE}
-
-mount /dev/${ROOT_DEVICE} /mnt
-__EOF__
-
-if echo "${ALPINE_VERSION}" | grep ^3\.8.* > /dev/null ; then
-##-------------------------------------------------------------- alpine 3.8 ---
-cat << __EOF__
-mount -o remount,rw /media/${BOOT_DEVICE}
-cd /mnt
-cp -a /bin /etc /home /lib /root /run /sbin /srv /usr /var .
-mkdir .modloop
-mkdir dev
-mkdir media
-mkdir proc
-mkdir sys
-mkdir tmp
-
-mkdir boot
-cp /media/${BOOT_DEVICE}/boot/* boot/
-
-<etc/init.d/modloop awk '
-    /if.*KOPT_modloop/ { 
-        print "\\t\\t\\t\\tif [ \"\${dir}\" == \"/\" ]; then"
-        print "\\t\\t\\t\\t\\tdir=\"\""
-        print "\\t\\t\\t\\tfi"
-    }
-    1' | sed 's,&& \$2 != "/" ,,' > etc/init.d/modloop.new
-mv etc/init.d/modloop.new etc/init.d/modloop
-chmod 755 etc/init.d/modloop
-
-sed -i 's/^/modloop=\\/boot\\/modloop-rpi /' /media/${BOOT_DEVICE}/cmdline.txt  
-
-__EOF__
-else
-##-------------------------------------------------------------- alpine 3.9 ---
-cat << __EOF__
-setup-disk -m sys /mnt
-
-mount -o remount,rw /media/${BOOT_DEVICE}
-
-rm -f /media/${BOOT_DEVICE}/boot/*  
-cd /mnt       # We are in the second partition 
-rm boot/boot  # Drop the unused symbolink link
-
-mv boot/* /media/${BOOT_DEVICE}/boot/
-rm -Rf boot
-__EOF__
-fi
-
-cat << __EOF__
-mkdir media/${BOOT_DEVICE} # It's the mount point for the first partition on the next reboot
-
-ln -s media/${BOOT_DEVICE}/boot boot
-
-echo "/dev/${BOOT_DEVICE} /media/${BOOT_DEVICE} vfat defaults 0 0" >> etc/fstab
-sed -i '/cdrom/d' etc/fstab   # Of course, you don't have any cdrom or floppy on the Raspberry Pi
-sed -i '/floppy/d' etc/fstab
-
-sed -i '/v.\\..\\/community/s/^#//' /mnt/etc/apk/repositories   # But enable the repository for community if you want vim, mc, php, apache, nginx, etc.
-
-sed -i 's/^/root=\\/dev\\/${ROOT_DEVICE} /' /media/${BOOT_DEVICE}/cmdline.txt  
-reboot 
-
-__EOF__
-) > "${DIR_APKOVL}/setup.sh" 
-chmod 755 "${DIR_APKOVL}/setup.sh"
-#
-#                                                            /<APKOVL>/setup.sh
-#
-###############################################################################
-
-###############################################################################
-#
-#                                               /<APKOVL>/etc/init.d/mypi-setup
-#
-mkdir -p "${DIR_APKOVL}/etc/init.d"
-(
-cat << __EOF__
-#!/sbin/openrc-run
-start()
-{
-    /setup.sh
-}
-__EOF__
-) > "${DIR_APKOVL}/etc/init.d/mypi-setup"
-chmod 755 "${DIR_APKOVL}/etc/init.d/mypi-setup"
-#
-#                                               /<APKOVL>/etc/init.d/mypi-setup
-#
-###############################################################################
-
 
 ###############################################################################
 #
@@ -188,7 +89,7 @@ cat <<-__EOF__
 set -x
 set -e
 
-rc-update del hwclock boot
+rc-update del hwclock boot &> /dev/null|| true
 rc-update add swclock boot
 
 apk add bash htop jq docker perl
@@ -252,17 +153,8 @@ fi
 #
 ###############################################################################
 
-touch "${DIR_APKOVL}/etc/.default_boot_services"
-
-mkdir -p "${DIR_APKOVL}/etc/runlevels/default"
-pushd "${DIR_APKOVL}/etc/runlevels/default"
-ln -s \
-    /etc/init.d/mypi-setup \
-    .
-popd >/dev/null
-
 pushd "${DIR_APKOVL}"
     tar czf ${DIR_THIS}/mnt/${RPI_HOSTNAME}.apkovl.tar.gz .
 popd >/dev/null
 
-#umount "${DIR_THIS}/mnt"
+umount "${DIR_THIS}/mnt"
