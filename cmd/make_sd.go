@@ -13,11 +13,13 @@ func main() {
 	}
 
 	for _, disk := range disks {
+		if !disk.IsRemovable() {
+			continue
+		}
 		fmt.Println(disk.GetDeviceName())
 		partitions, _ := disk.GetPartitions()
 		for _, partition := range partitions {
 			fmt.Println("  " + partition.GetDeviceName())
 		}
-
 	}
 }
